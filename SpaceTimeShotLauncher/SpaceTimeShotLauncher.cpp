@@ -1,4 +1,4 @@
-// AudioVisualizer.cpp : Defines the entry point for the application.
+// SpaceTimeShotLauncher.cpp : Defines the entry point for the application.
 //
 
 #include "framework.h"
@@ -74,7 +74,7 @@ ATOM MyRegisterClass(HINSTANCE hInstance)
     hBrushBackground = CreateSolidBrush(RGB(0,0,0));
 
 
-    WNDCLASSEXW wcex;
+    WNDCLASSEXW wcex = { 0 }; // <--- CRITICAL: Initialize everything to zero/null
 
     wcex.cbSize = sizeof(WNDCLASSEX);
 

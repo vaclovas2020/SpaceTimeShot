@@ -3,9 +3,9 @@
 // Used by SpaceTimeShotLauncher.rc
 //
 #define IDS_APP_TITLE                   101
-#define IDS_APP_CLASS                   102
 #define IDR_ACCELERATOR1                102
 #define IDI_ICON1                       105
+#define IDS_APP_CLASS                   110
 #define ID_ACCELERATOR_VK_LEFT          40001
 #define ID_ACCELERATOR_VK_RIGHT         40002
 #define ID_ACCELERATOR_VK_UP            40003
