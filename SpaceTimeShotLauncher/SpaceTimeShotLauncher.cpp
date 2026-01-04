@@ -52,7 +52,25 @@ float g_FpsAccum = 0.0f;
 int   g_FpsFrames = 0;
 float g_CurrentFPS = 0.0f;
 
+// ------------------------------------------------------------
+// Function Declarations
+// ------------------------------------------------------------
+
+void ShowError(const wchar_t* msg);
 void ToggleFullscreen(HWND hWnd);
+void ShowLastError(HWND hwnd, const wchar_t* context);
+void ShowHRESULT(HWND hwnd, HRESULT hr, const wchar_t* context);
+bool CreateDevice();
+bool CreateD2D();
+bool LoadPNGFromResource(int resourceId);
+bool CreateText();
+void Update();
+void Render();
+LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
+    _In_opt_ HINSTANCE hPrevInstance,
+    _In_ LPWSTR    lpCmdLine,
+    _In_ int       nCmdShow);
 
 // ------------------------------------------------------------
 // Error helper
