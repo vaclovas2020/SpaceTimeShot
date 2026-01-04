@@ -173,7 +173,12 @@ bool CreateDevice()
 // ------------------------------------------------------------
 bool CreateD2D()
 {
-    HRESULT hr = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, &g_D2DFactory);
+    HRESULT hr = S_OK;
+
+    if (g_D2DFactory == nullptr) {
+        hr = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, &g_D2DFactory);
+        if (FAILED(hr)) return false;
+    }
 
     if (FAILED(hr)) {
         ShowHRESULT(g_hWnd, hr, L"D2D1CreateFactory() failed");
@@ -498,7 +503,7 @@ void Render()
 // ------------------------------------------------------------
 // Window Proc
 // ------------------------------------------------------------
-LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM)
+LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     switch (msg)
     {
@@ -519,25 +524,53 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM)
         }
         return 0;
 
+    case WM_GETMINMAXINFO:
+    {
+        // lParam is a pointer to a MINMAXINFO structure
+        LPMINMAXINFO lpMMI = (LPMINMAXINFO)lParam;
+
+        // Set the minimum width and height in pixels
+        // ptMinTrackSize is the smallest the window can be dragged
+        lpMMI->ptMinTrackSize.x = 1280; // Minimum width
+        lpMMI->ptMinTrackSize.y = 720; // Minimum height
+
+        return 0; // Return 0 to indicate we processed this message
+    }
+
     case WM_SIZE:
-        if (g_D2DTarget)
+        if (g_SwapChain && g_D2DTarget) // Ensure swap chain exists first
         {
-            g_D2DTarget->Release();
-            g_D2DTarget = nullptr;
+            // 1. Release ALL D2D resources that depend on the swap chain's buffers
+            SAFE_RELEASE(g_BackgroundBitmap); // Bitmaps are bound to the target
+            SAFE_RELEASE(g_WhiteBrush);       // Brushes are bound to the target
+            SAFE_RELEASE(g_GreenBrush);
+            SAFE_RELEASE(g_D2DTarget);        // Release the target itself
 
-            g_SwapChain->ResizeBuffers(
-                0, 0, 0, DXGI_FORMAT_UNKNOWN, 0);
+            // 2. Clear the D3D context state to ensure no internal references remain
+            if (g_Context) g_Context->ClearState();
 
+            // 3. Resize the buffers
+            // Use 0, 0 to tell DXGI to use the actual window client area size
+            HRESULT hr = g_SwapChain->ResizeBuffers(0, 0, 0, DXGI_FORMAT_UNKNOWN, 0);
+
+            if (FAILED(hr)) {
+                // If this fails, the debug layer will trigger your __debugbreak()
+                ShowHRESULT(hWnd, hr, L"ResizeBuffers Failed");
+            }
+
+            // 4. Recreate the target and resources
             CreateD2D();
-            CreateText(); // brushes depend on target
+            CreateText();
+            LoadPNGFromResource(IDB_PNG1);
         }
         return 0;
+
 
     case WM_DESTROY:
         PostQuitMessage(0);
         return 0;
     }
-    return DefWindowProc(hWnd, msg, wParam, 0);
+    return DefWindowProc(hWnd, msg, wParam, lParam);
 }
 
 // ------------------------------------------------------------
@@ -555,6 +588,9 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     LoadStringW(hInstance, IDS_APP_CLASS, szWindowClass, MAX_LOADSTRING);
 
     g_hInst = hInstance;
+
+    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+
     HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 
     if (FAILED(hr)) {
@@ -562,29 +598,35 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
         return 0;
     }
 
-
     QueryPerformanceFrequency(&g_Freq);
     QueryPerformanceCounter(&g_LastTime);
 
-    WNDCLASS wc{};
-    wc.lpfnWndProc = WndProc;
-    wc.hInstance = hInstance;
-    wc.lpszClassName = szWindowClass;
-    RegisterClass(&wc);
+    WNDCLASSEXW wcex{};
+    wcex.cbSize = sizeof(wcex);
+    wcex.lpfnWndProc = WndProc;
+    wcex.hInstance = hInstance;
+    wcex.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    wcex.hIcon = LoadIcon(hInstance, MAKEINTRESOURCE(IDI_ICON1));
+    wcex.hIconSm = wcex.hIcon;
+    wcex.hbrBackground = nullptr;
+    wcex.lpszClassName = szWindowClass;
 
-    RECT rc = { 0,0,WINDOW_WIDTH,WINDOW_HEIGHT };
-    AdjustWindowRect(&rc, WS_OVERLAPPEDWINDOW, FALSE);
-
-    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    RegisterClassExW(&wcex);
 
     g_hWnd = CreateWindowW(
         szWindowClass, 
         szTitle,
         WS_OVERLAPPEDWINDOW,
         0, 0,
-        rc.right - rc.left,
-        rc.bottom - rc.top,
+        WINDOW_WIDTH,
+        WINDOW_HEIGHT,
         nullptr, nullptr, hInstance, nullptr);
+
+    if (! g_hWnd) {
+        ShowLastError(g_hWnd, L"CreateWindowW failed");
+
+        return FALSE;
+    }
 
     ShowWindow(g_hWnd, nCmdShow);
     UpdateWindow(g_hWnd);
