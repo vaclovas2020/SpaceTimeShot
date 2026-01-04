@@ -42,6 +42,7 @@ ID2D1Bitmap* g_BackgroundBitmap = nullptr;
 
 // Game state
 bool        gameStarted = false;
+bool        g_IsFullscreen = false;
 ULONGLONG   g_StartTime = 0;
 std::wstring g_LastKey = L"Press an arrow key to start";
 
@@ -518,6 +519,12 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     switch (msg)
     {
+        case WM_SETCURSOR:
+            if (g_IsFullscreen) {
+                SetCursor(NULL); // Manually kill the cursor image
+                return TRUE;     // Tell Windows we handled it
+            }
+            break; // Let DefWindowProc handle it for windowed mode
         case WM_SYSKEYDOWN:
             // Check if the key is Enter (VK_RETURN) and the ALT key is held
             if (wParam == VK_RETURN && (lParam & (1 << 29)))
@@ -614,6 +621,11 @@ void ToggleFullscreen(HWND hWnd)
                 mi.rcMonitor.right - mi.rcMonitor.left,
                 mi.rcMonitor.bottom - mi.rcMonitor.top,
                 SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+
+            // Force the cursor to hide
+            while (ShowCursor(FALSE) >= 0);
+
+            g_IsFullscreen = true;
         }
     }
     else
@@ -624,6 +636,11 @@ void ToggleFullscreen(HWND hWnd)
         SetWindowPos(hWnd, NULL, 0, 0, 0, 0,
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
             SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+
+        // Force the cursor to show (when exiting fullscreen)
+        while (ShowCursor(TRUE) < 0);
+
+        g_IsFullscreen = false;
     }
 }
 
@@ -659,7 +676,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     wcex.cbSize = sizeof(wcex);
     wcex.lpfnWndProc = WndProc;
     wcex.hInstance = hInstance;
-    wcex.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    wcex.hCursor = nullptr;
     wcex.hIcon = LoadIcon(hInstance, MAKEINTRESOURCE(IDI_ICON1));
     wcex.hIconSm = wcex.hIcon;
     wcex.hbrBackground = nullptr;
