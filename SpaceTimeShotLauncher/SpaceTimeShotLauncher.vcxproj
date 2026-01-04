@@ -127,13 +127,23 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="CreateDevice.cpp" />
+    <ClCompile Include="ErrorHandler.cpp" />
+    <ClCompile Include="global.cpp" />
+    <ClCompile Include="Render.cpp" />
+    <ClCompile Include="ToggleFullscreen.cpp" />
     <ClCompile Include="SpaceTimeShotLauncher.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="CreateDevice.h" />
+    <ClInclude Include="ErrorHandler.h" />
     <ClInclude Include="framework.h" />
+    <ClInclude Include="global.h" />
+    <ClInclude Include="Render.h" />
     <ClInclude Include="resource.h" />
     <ClInclude Include="SpaceTimeShotLauncher.h" />
     <ClInclude Include="targetver.h" />
+    <ClInclude Include="ToggleFullscreen.h" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="SpaceTimeShotLauncher.rc" />
