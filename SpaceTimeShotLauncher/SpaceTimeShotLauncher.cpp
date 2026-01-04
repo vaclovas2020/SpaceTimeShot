@@ -1,69 +1,526 @@
-// SpaceTimeShotLauncher.cpp : Defines the entry point for the application.
+﻿// SpaceTimeShotLauncher.cpp : Defines the entry point for the application.
 //
 
 #include "framework.h"
 #include "SpaceTimeShotLauncher.h"
 
-using namespace Gdiplus;
+#define SAFE_RELEASE(x) if (x) { x->Release(); x = nullptr; }
+
+#define WINDOW_WIDTH  1440
+#define WINDOW_HEIGHT 900
 
 #define MAX_LOADSTRING 100
-#define WS_OVERLAPPEDWINDOWCUSTOM \
-    (WS_OVERLAPPED     | \
-     WS_CAPTION        | \
-     WS_SYSMENU        | \
-     WS_MINIMIZEBOX)
 
 // ------------------------------------------------------------
 // Globals
 // ------------------------------------------------------------
-HINSTANCE hInst;
+HWND g_hWnd = nullptr;
+HINSTANCE g_hInst = nullptr;
 WCHAR szTitle[MAX_LOADSTRING];
 WCHAR szWindowClass[MAX_LOADSTRING];
-ULONG_PTR gdiplusToken = 0;
 
-HACCEL hAccelTable = nullptr;
-HBRUSH hBrushBackground = nullptr;
+// DXGI / D3D
+ID3D11Device* g_Device = nullptr;
+ID3D11DeviceContext* g_Context = nullptr;
+IDXGISwapChain* g_SwapChain = nullptr;
 
-// Back buffer
-HDC     g_BackDC = nullptr;
-HBITMAP g_BackBitmap = nullptr;
+// Direct2D
+ID2D1Factory* g_D2DFactory = nullptr;
+ID2D1RenderTarget* g_D2DTarget = nullptr;
 
-// GDI+
-std::unique_ptr<Bitmap> g_BackgroundImage;
-std::unique_ptr<Font>   g_FontSmall;
-std::unique_ptr<Font>   g_FontLarge;
-std::unique_ptr<SolidBrush> g_WhiteBrush;
-std::unique_ptr<SolidBrush> g_GreenBrush;
+// DirectWrite
+IDWriteFactory* g_WriteFactory = nullptr;
+IDWriteTextFormat* g_FontSmall = nullptr;
+IDWriteTextFormat* g_FontLarge = nullptr;
 
-// State
-LPCWSTR g_lastKeyPressed = L"Press an arrow key to start";
-bool gameStarted = false;
-ULONGLONG g_StartTime = 0;
-WCHAR szCounterText[64] = L"00:00.00";
-WCHAR szFPS[32] = L"FPS: 0";
+// Brushes
+ID2D1SolidColorBrush* g_WhiteBrush = nullptr;
+ID2D1SolidColorBrush* g_GreenBrush = nullptr;
 
-// Timing
-LONGLONG g_Frequency = 0;
-LONGLONG g_LastTime = 0;
-float g_FrameTime = 0.0f;
+// Image
+ID2D1Bitmap* g_BackgroundBitmap = nullptr;
 
-// FPS averaging
+// Game state
+bool        gameStarted = false;
+ULONGLONG   g_StartTime = 0;
+std::wstring g_LastKey = L"Press an arrow key to start";
+
+// FPS
+LARGE_INTEGER g_Freq;
+LARGE_INTEGER g_LastTime;
 float g_FpsAccum = 0.0f;
 int   g_FpsFrames = 0;
+float g_CurrentFPS = 0.0f;
 
 // ------------------------------------------------------------
-// Forward declarations
+// Error helper
 // ------------------------------------------------------------
-ATOM                MyRegisterClass(HINSTANCE hInstance);
-BOOL                InitInstance(HINSTANCE, int);
-LRESULT CALLBACK    WndProc(HWND, UINT, WPARAM, LPARAM);
+void ShowError(const wchar_t* msg)
+{
+    MessageBoxW(g_hWnd, msg, L"Error", MB_ICONERROR);
+}
 
-void CreateBackBuffer(HWND hWnd);
-void DestroyBackBuffer();
-void UpdateGame();
-void Render(HWND hWnd);
-void DestroyGlobalObjects();
-void ShowLastError(HWND hWnd, LPCWSTR fn);
+void ShowLastError(HWND hwnd, const wchar_t* context)
+{
+    DWORD err = GetLastError();
+    if (err == 0)
+    {
+        MessageBoxW(hwnd, context, L"Win32 Error", MB_ICONERROR);
+        return;
+    }
+
+    wchar_t* msg = nullptr;
+    FormatMessageW(
+        FORMAT_MESSAGE_ALLOCATE_BUFFER |
+        FORMAT_MESSAGE_FROM_SYSTEM |
+        FORMAT_MESSAGE_IGNORE_INSERTS,
+        nullptr,
+        err,
+        MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+        (LPWSTR)&msg,
+        0,
+        nullptr);
+
+    wchar_t full[1024];
+    swprintf_s(full, L"%s\n\nError %lu:\n%s", context, err, msg);
+
+    MessageBoxW(hwnd, full, L"Win32 Error", MB_ICONERROR);
+    LocalFree(msg);
+}
+
+
+void ShowHRESULT(HWND hwnd, HRESULT hr, const wchar_t* context)
+{
+    wchar_t* msg = nullptr;
+
+    FormatMessageW(
+        FORMAT_MESSAGE_ALLOCATE_BUFFER |
+        FORMAT_MESSAGE_FROM_SYSTEM |
+        FORMAT_MESSAGE_IGNORE_INSERTS,
+        nullptr,
+        hr,
+        MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+        (LPWSTR)&msg,
+        0,
+        nullptr);
+
+    wchar_t full[1024];
+    swprintf_s(
+        full,
+        L"%s\n\nHRESULT: 0x%08X\n%s",
+        context,
+        hr,
+        msg ? msg : L"(No system message)");
+
+    MessageBoxW(hwnd, full, L"DirectX / COM Error", MB_ICONERROR);
+
+    if (msg) LocalFree(msg);
+}
+
+
+// ------------------------------------------------------------
+// Create Device & SwapChain (REAL VSYNC)
+// ------------------------------------------------------------
+bool CreateDevice()
+{
+    DXGI_SWAP_CHAIN_DESC scd{};
+    scd.BufferCount = 2;
+    scd.BufferDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    scd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+    scd.OutputWindow = g_hWnd;
+    scd.SampleDesc.Count = 1;
+    scd.Windowed = TRUE;
+    scd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+    scd.BufferCount = 2;
+
+    HRESULT hr = D3D11CreateDeviceAndSwapChain(
+        nullptr,
+        D3D_DRIVER_TYPE_HARDWARE,
+        nullptr,
+        D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+        nullptr, 0,
+        D3D11_SDK_VERSION,
+        &scd,
+        &g_SwapChain,
+        &g_Device,
+        nullptr,
+        &g_Context);
+
+    if (FAILED(hr))
+        ShowHRESULT(g_hWnd, hr, L"D3D11CreateDeviceAndSwapChain() failed");
+
+    return SUCCEEDED(hr);
+}
+
+// ------------------------------------------------------------
+// Create Direct2D Target
+// ------------------------------------------------------------
+bool CreateD2D()
+{
+    HRESULT hr = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, &g_D2DFactory);
+
+    if (FAILED(hr)) {
+        ShowHRESULT(g_hWnd, hr, L"D2D1CreateFactory() failed");
+        return false;
+    }
+
+    IDXGISurface* surface = nullptr;
+    g_SwapChain->GetBuffer(0, IID_PPV_ARGS(&surface));
+
+    D2D1_RENDER_TARGET_PROPERTIES props =
+        D2D1::RenderTargetProperties(
+            D2D1_RENDER_TARGET_TYPE_HARDWARE,
+            D2D1::PixelFormat(
+                DXGI_FORMAT_B8G8R8A8_UNORM,
+                D2D1_ALPHA_MODE_PREMULTIPLIED));
+
+    if (surface == nullptr) {
+        ShowError(L"surface is nullptrt");
+
+        return false;
+    }
+
+    hr = g_D2DFactory->CreateDxgiSurfaceRenderTarget(
+        surface,
+        &props,
+        &g_D2DTarget);
+
+    surface->Release();
+
+    if (FAILED(hr)) {
+        ShowHRESULT(g_hWnd, hr, L"CreateDxgiSurfaceRenderTarget() failed");
+    }
+
+    return SUCCEEDED(hr);
+}
+
+// ------------------------------------------------------------
+// Load PNG from Resource
+// ------------------------------------------------------------
+bool LoadPNGFromResource(int resourceId)
+{
+    IWICImagingFactory* wic = nullptr;
+    IWICStream* stream = nullptr;
+    IWICBitmapDecoder* decoder = nullptr;
+    IWICBitmapFrameDecode* frame = nullptr;
+    IWICFormatConverter* converter = nullptr;
+
+    // Locate resource
+    HRSRC hrsrc = FindResource(
+        g_hInst,
+        MAKEINTRESOURCE(resourceId),
+        L"PNG");
+
+    if (!hrsrc) return false;
+
+    HGLOBAL hglob = LoadResource(g_hInst, hrsrc);
+    if (!hglob) return false;
+
+    void* data = LockResource(hglob);
+    DWORD size = SizeofResource(g_hInst, hrsrc);
+    if (!data || !size) return false;
+
+    // Create WIC factory
+    HRESULT hr = CoCreateInstance(
+        CLSID_WICImagingFactory,
+        nullptr,
+        CLSCTX_INPROC_SERVER,
+        IID_PPV_ARGS(&wic));
+    
+    if (FAILED(hr))
+    {
+        ShowHRESULT(g_hWnd, hr, L"CoCreateInstance() failed");
+
+        goto cleanup;
+    }
+
+    // Create stream from memory
+    hr = wic->CreateStream(&stream);
+    
+    if (FAILED(hr))
+    {
+        ShowHRESULT(g_hWnd, hr, L"CreateStream() failed");
+
+        goto cleanup;
+    }
+
+    hr = stream->InitializeFromMemory(
+        reinterpret_cast<BYTE*>(data),
+        size);
+    
+    if (FAILED(hr))
+    {
+        ShowHRESULT(g_hWnd, hr, L"InitializeFromMemory() failed");
+
+        goto cleanup;
+    }
+
+    // Decode PNG
+    hr = wic->CreateDecoderFromStream(
+        stream,
+        nullptr,
+        WICDecodeMetadataCacheOnLoad,
+        &decoder);
+    
+    if (FAILED(hr))
+    {
+        ShowHRESULT(g_hWnd, hr, L"CreateDecoderFromStream() failed");
+
+        goto cleanup;
+    }
+
+    hr = decoder->GetFrame(0, &frame);
+    
+    if (FAILED(hr))
+    {
+        ShowHRESULT(g_hWnd, hr, L"decoder->GetFrame() failed");
+
+        goto cleanup;
+    }
+
+    // Convert to 32bpp premultiplied BGRA
+    hr = wic->CreateFormatConverter(&converter);
+   
+    if (FAILED(hr))
+    {
+        ShowHRESULT(g_hWnd, hr, L"wic->CreateFormatConverter() failed");
+
+        goto cleanup;
+    }
+
+    hr = converter->Initialize(
+        frame,
+        GUID_WICPixelFormat32bppPBGRA,
+        WICBitmapDitherTypeNone,
+        nullptr,
+        0.0,
+        WICBitmapPaletteTypeCustom);
+   
+    if (FAILED(hr))
+    {
+        ShowHRESULT(g_hWnd, hr, L"converter->Initialize() failed");
+
+        goto cleanup;
+    }
+
+    // Create Direct2D bitmap
+    hr = g_D2DTarget->CreateBitmapFromWicBitmap(
+        converter,
+        nullptr,
+        &g_BackgroundBitmap);
+
+    if (FAILED(hr))
+    {
+        ShowHRESULT(g_hWnd, hr, L"g_D2DTarget->CreateBitmapFromWicBitmap() failed");
+
+        goto cleanup;
+    }
+
+cleanup:
+    SAFE_RELEASE(converter);
+    SAFE_RELEASE(frame);
+    SAFE_RELEASE(decoder);
+    SAFE_RELEASE(stream);
+    SAFE_RELEASE(wic);
+
+    return SUCCEEDED(hr) && g_BackgroundBitmap != nullptr;
+}
+
+// ------------------------------------------------------------
+// Init DirectWrite + Brushes
+// ------------------------------------------------------------
+bool CreateText()
+{
+    HRESULT hr = DWriteCreateFactory(
+        DWRITE_FACTORY_TYPE_SHARED,
+        __uuidof(IDWriteFactory),
+        (IUnknown**)&g_WriteFactory);
+
+    if (FAILED(hr))
+    {
+        ShowHRESULT(g_hWnd, hr, L"DWriteCreateFactory() failed");
+
+        return false;
+    }
+
+    if (FAILED(
+        g_WriteFactory->CreateTextFormat(
+            L"Consolas", nullptr,
+            DWRITE_FONT_WEIGHT_BOLD,
+            DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL,
+            24, L"",
+            &g_FontSmall)
+        )
+    ) {
+        ShowHRESULT(g_hWnd, hr, L"CreateTextFormat() failed");
+
+        return false;
+    }
+
+    if (FAILED(
+        g_WriteFactory->CreateTextFormat(
+            L"Consolas", nullptr,
+            DWRITE_FONT_WEIGHT_BOLD,
+            DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL,
+            36, L"",
+            &g_FontLarge)
+        )
+    ) {
+        ShowHRESULT(g_hWnd, hr, L"CreateTextFormat() failed");
+
+        return false;
+    }
+
+    if (FAILED(
+        g_D2DTarget->CreateSolidColorBrush(
+            D2D1::ColorF(D2D1::ColorF::White),
+            &g_WhiteBrush)
+        )
+    ) {
+        ShowHRESULT(g_hWnd, hr, L"CreateTextFormat() failed");
+
+        return false;
+    }
+
+    if (FAILED(
+        g_D2DTarget->CreateSolidColorBrush(
+            D2D1::ColorF(0, 1, 0),
+            &g_GreenBrush)
+        )
+    ) {
+        ShowHRESULT(g_hWnd, hr, L"CreateTextFormat() failed");
+
+        return false;
+    }
+
+    return true;
+}
+
+// ------------------------------------------------------------
+// Update + FPS
+// ------------------------------------------------------------
+void Update()
+{
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+
+    float dt = float(now.QuadPart - g_LastTime.QuadPart) / g_Freq.QuadPart;
+    g_LastTime = now;
+
+    g_FpsAccum += dt;
+    g_FpsFrames++;
+
+    if (g_FpsAccum >= 0.5f)
+    {
+        g_CurrentFPS = g_FpsFrames / g_FpsAccum;
+        g_FpsAccum = 0;
+        g_FpsFrames = 0;
+    }
+}
+
+// ------------------------------------------------------------
+// Render (REAL VSYNC)
+// ------------------------------------------------------------
+void Render()
+{
+    g_D2DTarget->BeginDraw();
+    g_D2DTarget->Clear(D2D1::ColorF(D2D1::ColorF::Black));
+
+    if (g_BackgroundBitmap)
+    {
+        D2D1_SIZE_F s = g_D2DTarget->GetSize();
+        g_D2DTarget->DrawBitmap(
+            g_BackgroundBitmap,
+            D2D1::RectF(0, 0, s.width, s.height));
+    }
+
+    // Bottom-left key text
+    D2D1_SIZE_F size = g_D2DTarget->GetSize();
+    D2D1_RECT_F bottom =
+        D2D1::RectF(20, size.height - 50, size.width, size.height);
+
+    g_D2DTarget->DrawTextW(
+        g_LastKey.c_str(),
+        (UINT32)g_LastKey.size(),
+        g_FontSmall,
+        bottom,
+        g_WhiteBrush);
+
+    if (gameStarted)
+    {
+        ULONGLONG e = GetTickCount64() - g_StartTime;
+        wchar_t timer[64];
+        swprintf_s(timer, L"%02llu:%02llu.%02llu",
+            e / 60000, (e / 1000) % 60, (e % 1000) / 10);
+
+        g_D2DTarget->DrawTextW(
+            timer, wcslen(timer),
+            g_FontLarge,
+            D2D1::RectF(20, 20, 400, 100),
+            g_GreenBrush);
+
+        wchar_t fps[32];
+        swprintf_s(fps, L"FPS: %.1f", g_CurrentFPS);
+
+        g_D2DTarget->DrawTextW(
+            fps, wcslen(fps),
+            g_FontSmall,
+            D2D1::RectF(size.width - 200, 20, size.width, 80),
+            g_WhiteBrush);
+    }
+
+    g_D2DTarget->EndDraw();
+
+    // 🔥 REAL VSYNC
+    g_SwapChain->Present(1, 0);
+}
+
+// ------------------------------------------------------------
+// Window Proc
+// ------------------------------------------------------------
+LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM)
+{
+    switch (msg)
+    {
+    case WM_KEYDOWN:
+        switch (wParam)
+        {
+        case VK_LEFT:  g_LastKey = L"LEFT"; break;
+        case VK_RIGHT: g_LastKey = L"RIGHT"; break;
+        case VK_UP:    g_LastKey = L"UP"; break;
+        case VK_DOWN:  g_LastKey = L"DOWN"; break;
+        default: return 0;
+        }
+
+        if (!gameStarted)
+        {
+            gameStarted = true;
+            g_StartTime = GetTickCount64();
+        }
+        return 0;
+
+    case WM_SIZE:
+        if (g_D2DTarget)
+        {
+            g_D2DTarget->Release();
+            g_D2DTarget = nullptr;
+
+            g_SwapChain->ResizeBuffers(
+                0, 0, 0, DXGI_FORMAT_UNKNOWN, 0);
+
+            CreateD2D();
+            CreateText(); // brushes depend on target
+        }
+        return 0;
+
+    case WM_DESTROY:
+        PostQuitMessage(0);
+        return 0;
+    }
+    return DefWindowProc(hWnd, msg, wParam, 0);
+}
 
 // ------------------------------------------------------------
 // Entry Point
@@ -79,22 +536,50 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     LoadStringW(hInstance, IDS_APP_TITLE, szTitle, MAX_LOADSTRING);
     LoadStringW(hInstance, IDS_APP_CLASS, szWindowClass, MAX_LOADSTRING);
 
-    GdiplusStartupInput gsi;
-    GdiplusStartup(&gdiplusToken, &gsi, nullptr);
+    g_hInst = hInstance;
+    HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 
-    MyRegisterClass(hInstance);
+    if (FAILED(hr)) {
+        ShowHRESULT(g_hWnd, hr, L"CoInitializeEx failed");
+        return 0;
+    }
 
-    if (!InitInstance(hInstance, nCmdShow))
-        return FALSE;
 
-    hAccelTable = LoadAccelerators(hInstance, MAKEINTRESOURCE(IDR_ACCELERATOR1));
+    QueryPerformanceFrequency(&g_Freq);
+    QueryPerformanceCounter(&g_LastTime);
 
-    QueryPerformanceFrequency((LARGE_INTEGER*)&g_Frequency);
-    QueryPerformanceCounter((LARGE_INTEGER*)&g_LastTime);
+    WNDCLASS wc{};
+    wc.lpfnWndProc = WndProc;
+    wc.hInstance = hInstance;
+    wc.lpszClassName = szWindowClass;
+    RegisterClass(&wc);
+
+    RECT rc = { 0,0,WINDOW_WIDTH,WINDOW_HEIGHT };
+    AdjustWindowRect(&rc, WS_OVERLAPPEDWINDOW, FALSE);
+
+    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+
+    g_hWnd = CreateWindowW(
+        szWindowClass, 
+        szTitle,
+        WS_OVERLAPPEDWINDOW,
+        0, 0,
+        rc.right - rc.left,
+        rc.bottom - rc.top,
+        nullptr, nullptr, hInstance, nullptr);
+
+    ShowWindow(g_hWnd, nCmdShow);
+    UpdateWindow(g_hWnd);
+
+    if (!CreateDevice() ||
+        !CreateD2D() ||
+        !CreateText() ||
+        !LoadPNGFromResource(IDB_PNG1)
+        ) {
+        return 0;
+    }
 
     MSG msg{};
-    HWND hWnd = FindWindow(szWindowClass, nullptr);
-
     while (true)
     {
         while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
@@ -102,277 +587,27 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
             if (msg.message == WM_QUIT)
                 goto shutdown;
 
-            if (!TranslateAccelerator(msg.hwnd, hAccelTable, &msg))
-            {
-                TranslateMessage(&msg);
-                DispatchMessage(&msg);
-            }
+            TranslateMessage(&msg);
+            DispatchMessage(&msg);
         }
 
-        UpdateGame();
-        InvalidateRect(hWnd, nullptr, FALSE);
-        Sleep(1);
+        Update();
+        Render();
     }
 
 shutdown:
-    DestroyGlobalObjects();
-    GdiplusShutdown(gdiplusToken);
-    return (int)msg.wParam;
-}
+    SAFE_RELEASE(g_BackgroundBitmap);
+    SAFE_RELEASE(g_WhiteBrush);
+    SAFE_RELEASE(g_GreenBrush);
+    SAFE_RELEASE(g_FontSmall);
+    SAFE_RELEASE(g_FontLarge);
+    SAFE_RELEASE(g_WriteFactory);
+    SAFE_RELEASE(g_D2DTarget);
+    SAFE_RELEASE(g_D2DFactory);
+    SAFE_RELEASE(g_SwapChain);
+    SAFE_RELEASE(g_Context);
+    SAFE_RELEASE(g_Device);
 
-// ------------------------------------------------------------
-// Error Handling
-// ------------------------------------------------------------
-void ShowLastError(HWND hWnd, LPCWSTR fn)
-{
-    DWORD err = GetLastError();
-    if (!err) return;
-
-    LPWSTR msg = nullptr;
-    FormatMessage(
-        FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM,
-        nullptr, err, 0, (LPWSTR)&msg, 0, nullptr);
-
-    MessageBox(hWnd, msg, fn, MB_ICONERROR | MB_OK);
-    LocalFree(msg);
-}
-
-// ------------------------------------------------------------
-// Cleanup
-// ------------------------------------------------------------
-void DestroyGlobalObjects()
-{
-    DestroyBackBuffer();
-
-    g_BackgroundImage.reset();
-    g_FontSmall.reset();
-    g_FontLarge.reset();
-    g_WhiteBrush.reset();
-    g_GreenBrush.reset();
-
-    if (hBrushBackground)
-    {
-        DeleteObject(hBrushBackground);
-        hBrushBackground = nullptr;
-    }
-
-    if (hAccelTable)
-    {
-        DestroyAcceleratorTable(hAccelTable);
-        hAccelTable = nullptr;
-    }
-}
-
-// ------------------------------------------------------------
-// Window Class
-// ------------------------------------------------------------
-ATOM MyRegisterClass(HINSTANCE hInstance)
-{
-    hBrushBackground = CreateSolidBrush(RGB(0, 0, 0));
-
-    WNDCLASSEXW wcex{};
-    wcex.cbSize = sizeof(wcex);
-    wcex.lpfnWndProc = WndProc;
-    wcex.hInstance = hInstance;
-    wcex.hCursor = LoadCursor(nullptr, IDC_ARROW);
-    wcex.hIcon = LoadIcon(hInstance, MAKEINTRESOURCE(IDI_ICON1));
-    wcex.hIconSm = wcex.hIcon;
-    wcex.hbrBackground = nullptr;
-    wcex.lpszClassName = szWindowClass;
-
-    return RegisterClassExW(&wcex);
-}
-
-// ------------------------------------------------------------
-// Init Instance
-// ------------------------------------------------------------
-BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
-{
-    hInst = hInstance;
-
-    RECT rc = { 0,0,1440,900 };
-    AdjustWindowRect(&rc, WS_OVERLAPPEDWINDOWCUSTOM, FALSE);
-
-    HWND hWnd = CreateWindowW(
-        szWindowClass, szTitle,
-        WS_OVERLAPPEDWINDOWCUSTOM,
-        0, 0,
-        rc.right - rc.left,
-        rc.bottom - rc.top,
-        nullptr, nullptr, hInstance, nullptr);
-
-    if (!hWnd)
-    {
-        ShowLastError(nullptr, L"CreateWindowW");
-        return FALSE;
-    }
-
-    ShowWindow(hWnd, nCmdShow);
-    UpdateWindow(hWnd);
-    return TRUE;
-}
-
-// ------------------------------------------------------------
-// Back Buffer
-// ------------------------------------------------------------
-void CreateBackBuffer(HWND hWnd)
-{
-    DestroyBackBuffer();
-
-    RECT rc;
-    GetClientRect(hWnd, &rc);
-
-    HDC hdc = GetDC(hWnd);
-    g_BackDC = CreateCompatibleDC(hdc);
-    g_BackBitmap = CreateCompatibleBitmap(hdc, rc.right, rc.bottom);
-
-    if (!g_BackDC || !g_BackBitmap)
-    {
-        ShowLastError(hWnd, L"CreateBackBuffer");
-        ReleaseDC(hWnd, hdc);
-        return;
-    }
-
-    SelectObject(g_BackDC, g_BackBitmap);
-    ReleaseDC(hWnd, hdc);
-}
-
-void DestroyBackBuffer()
-{
-    if (g_BackBitmap) { DeleteObject(g_BackBitmap); g_BackBitmap = nullptr; }
-    if (g_BackDC) { DeleteDC(g_BackDC); g_BackDC = nullptr; }
-}
-
-// ------------------------------------------------------------
-// Update
-// ------------------------------------------------------------
-void UpdateGame()
-{
-    LONGLONG now = 0;
-    QueryPerformanceCounter((LARGE_INTEGER*)&now);
-    g_FrameTime = float(now - g_LastTime) / g_Frequency;
-    g_LastTime = now;
-
-    g_FpsAccum += g_FrameTime;
-    g_FpsFrames++;
-
-    if (g_FpsAccum >= 0.5f)
-    {
-        swprintf_s(szFPS, L"FPS: %.1f", g_FpsFrames / g_FpsAccum);
-        g_FpsAccum = 0;
-        g_FpsFrames = 0;
-    }
-
-    if (gameStarted)
-    {
-        ULONGLONG e = GetTickCount64() - g_StartTime;
-        swprintf_s(szCounterText, L"%02llu:%02llu.%02llu",
-            e / 60000, (e / 1000) % 60, (e % 1000) / 10);
-    }
-}
-
-// ------------------------------------------------------------
-// Render
-// ------------------------------------------------------------
-void Render(HWND hWnd)
-{
-    PAINTSTRUCT ps;
-    HDC hdc = BeginPaint(hWnd, &ps);
-
-    RECT rc;
-    GetClientRect(hWnd, &rc);
-
-    FillRect(g_BackDC, &rc, hBrushBackground);
-    Graphics g(g_BackDC);
-
-    if (g_BackgroundImage)
-        g.DrawImage(g_BackgroundImage.get(), 0, 0);
-
-    g.DrawString(g_lastKeyPressed, -1, g_FontSmall.get(),
-        PointF(20, rc.bottom - 40), g_WhiteBrush.get());
-
-    if (gameStarted)
-    {
-        g.DrawString(szCounterText, -1, g_FontLarge.get(),
-            PointF(20, 20), g_GreenBrush.get());
-
-        StringFormat fmt;
-        fmt.SetAlignment(StringAlignmentFar);
-        RectF r(0, 0, (REAL)rc.right, (REAL)rc.bottom);
-        g.DrawString(szFPS, -1, g_FontSmall.get(), r, &fmt, g_WhiteBrush.get());
-    }
-
-    BitBlt(hdc, 0, 0, rc.right, rc.bottom, g_BackDC, 0, 0, SRCCOPY);
-    EndPaint(hWnd, &ps);
-}
-
-// ------------------------------------------------------------
-// WndProc
-// ------------------------------------------------------------
-LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
-{
-    switch (msg)
-    {
-    case WM_CREATE:
-    {
-        CreateBackBuffer(hWnd);
-
-        HRSRC res = FindResource(hInst, MAKEINTRESOURCE(IDB_PNG1), L"PNG");
-        if (!res) { ShowLastError(hWnd, L"FindResource"); return -1; }
-
-        DWORD size = SizeofResource(hInst, res);
-        HGLOBAL data = LoadResource(hInst, res);
-        void* ptr = LockResource(data);
-
-        HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, size);
-        memcpy(GlobalLock(hMem), ptr, size);
-        GlobalUnlock(hMem);
-
-        IStream* stream = nullptr;
-        CreateStreamOnHGlobal(hMem, TRUE, &stream);
-        g_BackgroundImage.reset(Bitmap::FromStream(stream));
-        stream->Release();
-
-        FontFamily ff(L"Consolas");
-        g_FontSmall = std::make_unique<Font>(&ff, 24, FontStyleBold, UnitPixel);
-        g_FontLarge = std::make_unique<Font>(&ff, 36, FontStyleBold, UnitPixel);
-        g_WhiteBrush = std::make_unique<SolidBrush>(Color(255, 255, 255));
-        g_GreenBrush = std::make_unique<SolidBrush>(Color(255, 0, 255, 0));
-    }
+    CoUninitialize();
     return 0;
-
-    case WM_SIZE:
-        CreateBackBuffer(hWnd);
-        return 0;
-
-    case WM_ERASEBKGND:
-        return TRUE;
-
-    case WM_COMMAND:
-        switch (LOWORD(wParam))
-        {
-        case ID_ACCELERATOR_VK_LEFT:  g_lastKeyPressed = L"LEFT"; break;
-        case ID_ACCELERATOR_VK_RIGHT: g_lastKeyPressed = L"RIGHT"; break;
-        case ID_ACCELERATOR_VK_UP:    g_lastKeyPressed = L"UP"; break;
-        case ID_ACCELERATOR_VK_DOWN:  g_lastKeyPressed = L"DOWN"; break;
-        default: return DefWindowProc(hWnd, msg, wParam, lParam);
-        }
-
-        if (!gameStarted)
-        {
-            gameStarted = true;
-            g_StartTime = GetTickCount64();
-        }
-        return 0;
-
-    case WM_PAINT:
-        Render(hWnd);
-        return 0;
-
-    case WM_DESTROY:
-        DestroyGlobalObjects();
-        PostQuitMessage(0);
-        return 0;
-    }
-    return DefWindowProc(hWnd, msg, wParam, lParam);
 }

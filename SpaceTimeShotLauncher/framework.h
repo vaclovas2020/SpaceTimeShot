@@ -13,12 +13,18 @@
 #include <malloc.h>
 #include <memory.h>
 #include <tchar.h>
-#include <mmdeviceapi.h>
-#include <audioclient.h>
-#include <avrt.h>
 #include <vector>
 #include <thread>
 #include <atomic>
-#include <gdiplus.h>
-#pragma comment(lib, "avrt.lib")
-#pragma comment(lib, "gdiplus.lib")
+#include <d3d11.h>
+#include <dxgi.h>
+#include <d2d1.h>
+#include <dwrite.h>
+#include <wincodec.h>
+#include <string>
+
+#pragma comment(lib, "d3d11.lib")
+#pragma comment(lib, "dxgi.lib")
+#pragma comment(lib, "d2d1.lib")
+#pragma comment(lib, "dwrite.lib")
+#pragma comment(lib, "windowscodecs.lib")
