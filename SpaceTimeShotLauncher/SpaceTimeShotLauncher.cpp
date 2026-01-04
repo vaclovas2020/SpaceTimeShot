@@ -74,7 +74,7 @@ ATOM MyRegisterClass(HINSTANCE hInstance)
     hBrushBackground = CreateSolidBrush(RGB(0,0,0));
 
 
-    WNDCLASSEXW  = {};
+    WNDCLASSEXW wcex = {};
 
     wcex.cbSize = sizeof(WNDCLASSEX);
 
