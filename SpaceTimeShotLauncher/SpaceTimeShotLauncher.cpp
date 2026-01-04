@@ -6,8 +6,8 @@
 
 #define SAFE_RELEASE(x) if (x) { x->Release(); x = nullptr; }
 
-#define WINDOW_WIDTH  1440
-#define WINDOW_HEIGHT 900
+#define WINDOW_WIDTH  1280
+#define WINDOW_HEIGHT 720
 
 #define MAX_LOADSTRING 100
 
@@ -51,6 +51,8 @@ LARGE_INTEGER g_LastTime;
 float g_FpsAccum = 0.0f;
 int   g_FpsFrames = 0;
 float g_CurrentFPS = 0.0f;
+
+void ToggleFullscreen(HWND hWnd);
 
 // ------------------------------------------------------------
 // Error helper
@@ -165,6 +167,16 @@ bool CreateDevice()
     if (FAILED(hr))
         ShowHRESULT(g_hWnd, hr, L"D3D11CreateDeviceAndSwapChain() failed");
 
+    // Get the DXGI Factory from your swap chain
+    IDXGIFactory* pFactory = nullptr;
+
+    if (SUCCEEDED(g_SwapChain->GetParent(IID_PPV_ARGS(&pFactory))))
+    {
+        // Tell DXGI to ignore Alt+Enter so we can handle it in WndProc
+        pFactory->MakeWindowAssociation(g_hWnd, DXGI_MWA_NO_ALT_ENTER);
+        pFactory->Release();
+    }
+
     return SUCCEEDED(hr);
 }
 
@@ -175,42 +187,23 @@ bool CreateD2D()
 {
     HRESULT hr = S_OK;
 
-    if (g_D2DFactory == nullptr) {
+    // 1. Only create factory if it doesn't exist [Fixes your memory leak]
+    if (!g_D2DFactory) {
         hr = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, &g_D2DFactory);
         if (FAILED(hr)) return false;
     }
 
-    if (FAILED(hr)) {
-        ShowHRESULT(g_hWnd, hr, L"D2D1CreateFactory() failed");
-        return false;
-    }
-
+    // 2. Target MUST be recreated when window sizes change
     IDXGISurface* surface = nullptr;
-    g_SwapChain->GetBuffer(0, IID_PPV_ARGS(&surface));
+    hr = g_SwapChain->GetBuffer(0, IID_PPV_ARGS(&surface));
+    if (FAILED(hr)) return false;
 
-    D2D1_RENDER_TARGET_PROPERTIES props =
-        D2D1::RenderTargetProperties(
-            D2D1_RENDER_TARGET_TYPE_HARDWARE,
-            D2D1::PixelFormat(
-                DXGI_FORMAT_B8G8R8A8_UNORM,
-                D2D1_ALPHA_MODE_PREMULTIPLIED));
+    D2D1_RENDER_TARGET_PROPERTIES props = D2D1::RenderTargetProperties(
+        D2D1_RENDER_TARGET_TYPE_HARDWARE,
+        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
 
-    if (surface == nullptr) {
-        ShowError(L"surface is nullptrt");
-
-        return false;
-    }
-
-    hr = g_D2DFactory->CreateDxgiSurfaceRenderTarget(
-        surface,
-        &props,
-        &g_D2DTarget);
-
+    hr = g_D2DFactory->CreateDxgiSurfaceRenderTarget(surface, &props, &g_D2DTarget);
     surface->Release();
-
-    if (FAILED(hr)) {
-        ShowHRESULT(g_hWnd, hr, L"CreateDxgiSurfaceRenderTarget() failed");
-    }
 
     return SUCCEEDED(hr);
 }
@@ -507,70 +500,113 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     switch (msg)
     {
-    case WM_KEYDOWN:
-        switch (wParam)
-        {
-        case VK_LEFT:  g_LastKey = L"LEFT"; break;
-        case VK_RIGHT: g_LastKey = L"RIGHT"; break;
-        case VK_UP:    g_LastKey = L"UP"; break;
-        case VK_DOWN:  g_LastKey = L"DOWN"; break;
-        default: return 0;
-        }
+        case WM_SYSKEYDOWN:
+            // Check if the key is Enter (VK_RETURN) and the ALT key is held
+            if (wParam == VK_RETURN && (lParam & (1 << 29)))
+            {
+                ToggleFullscreen(hWnd);
+                return 0;
+            }
+            return DefWindowProc(hWnd, msg, wParam, lParam);
 
-        if (!gameStarted)
-        {
-            gameStarted = true;
-            g_StartTime = GetTickCount64();
-        }
-        return 0;
+        case WM_KEYDOWN:
+            switch (wParam)
+            {
+            case VK_ESCAPE:
+                PostQuitMessage(0);
+                return 0;
 
-    case WM_GETMINMAXINFO:
-    {
-        // lParam is a pointer to a MINMAXINFO structure
-        LPMINMAXINFO lpMMI = (LPMINMAXINFO)lParam;
+            case VK_LEFT:  g_LastKey = L"LEFT"; break;
+            case VK_RIGHT: g_LastKey = L"RIGHT"; break;
+            case VK_UP:    g_LastKey = L"UP"; break;
+            case VK_DOWN:  g_LastKey = L"DOWN"; break;
 
-        // Set the minimum width and height in pixels
-        // ptMinTrackSize is the smallest the window can be dragged
-        lpMMI->ptMinTrackSize.x = 1280; // Minimum width
-        lpMMI->ptMinTrackSize.y = 720; // Minimum height
-
-        return 0; // Return 0 to indicate we processed this message
-    }
-
-    case WM_SIZE:
-        if (g_SwapChain && g_D2DTarget) // Ensure swap chain exists first
-        {
-            // 1. Release ALL D2D resources that depend on the swap chain's buffers
-            SAFE_RELEASE(g_BackgroundBitmap); // Bitmaps are bound to the target
-            SAFE_RELEASE(g_WhiteBrush);       // Brushes are bound to the target
-            SAFE_RELEASE(g_GreenBrush);
-            SAFE_RELEASE(g_D2DTarget);        // Release the target itself
-
-            // 2. Clear the D3D context state to ensure no internal references remain
-            if (g_Context) g_Context->ClearState();
-
-            // 3. Resize the buffers
-            // Use 0, 0 to tell DXGI to use the actual window client area size
-            HRESULT hr = g_SwapChain->ResizeBuffers(0, 0, 0, DXGI_FORMAT_UNKNOWN, 0);
-
-            if (FAILED(hr)) {
-                // If this fails, the debug layer will trigger your __debugbreak()
-                ShowHRESULT(hWnd, hr, L"ResizeBuffers Failed");
+            default:
+                // Allow other keys to fall through to DefWindowProc
+                return DefWindowProc(hWnd, msg, wParam, lParam);
             }
 
-            // 4. Recreate the target and resources
-            CreateD2D();
-            CreateText();
-            LoadPNGFromResource(IDB_PNG1);
+            // This part only runs if it was one of your arrow keys
+            if (!gameStarted)
+            {
+                gameStarted = true;
+                g_StartTime = GetTickCount64();
+            }
+            return 0;
+
+        case WM_GETMINMAXINFO:
+        {
+            LPMINMAXINFO lpMMI = (LPMINMAXINFO)lParam;
+
+            // Optional: Scale limits by DPI for 2026 high-res monitors
+            UINT dpi = GetDpiForWindow(hWnd);
+            float scale = dpi / 96.0f;
+
+            lpMMI->ptMinTrackSize.x = static_cast<LONG>(WINDOW_WIDTH * scale);
+            lpMMI->ptMinTrackSize.y = static_cast<LONG>(WINDOW_HEIGHT * scale);
+
+            return 0;
         }
-        return 0;
+
+        case WM_SIZE:
+            // Ensure DirectX objects exist before attempting to resize
+            if (g_SwapChain && g_D2DTarget)
+            {
+                // Release ALL device-dependent resources
+                SAFE_RELEASE(g_BackgroundBitmap);
+                SAFE_RELEASE(g_WhiteBrush);
+                SAFE_RELEASE(g_GreenBrush);
+                SAFE_RELEASE(g_D2DTarget);
+
+                // Resize buffers to match new window size
+                g_SwapChain->ResizeBuffers(0, 0, 0, DXGI_FORMAT_UNKNOWN, 0);
+
+                // Recreate resources for the new size
+                CreateD2D();
+                CreateText();
+                LoadPNGFromResource(IDB_PNG1);
+            }
+            return 0;
 
 
-    case WM_DESTROY:
-        PostQuitMessage(0);
-        return 0;
+        case WM_DESTROY:
+            PostQuitMessage(0);
+            return 0;
     }
+
     return DefWindowProc(hWnd, msg, wParam, lParam);
+}
+
+void ToggleFullscreen(HWND hWnd)
+{
+    static WINDOWPLACEMENT wpPrev = { sizeof(wpPrev) };
+
+    DWORD dwStyle = GetWindowLong(hWnd, GWL_STYLE);
+
+    if (dwStyle & WS_OVERLAPPEDWINDOW)
+    {
+        // Transition TO Fullscreen
+        MONITORINFO mi = { sizeof(mi) };
+        if (GetWindowPlacement(hWnd, &wpPrev) &&
+            GetMonitorInfo(MonitorFromWindow(hWnd, MONITOR_DEFAULTTOPRIMARY), &mi))
+        {
+            SetWindowLong(hWnd, GWL_STYLE, dwStyle & ~WS_OVERLAPPEDWINDOW | WS_POPUP);
+            SetWindowPos(hWnd, HWND_TOP,
+                mi.rcMonitor.left, mi.rcMonitor.top,
+                mi.rcMonitor.right - mi.rcMonitor.left,
+                mi.rcMonitor.bottom - mi.rcMonitor.top,
+                SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+        }
+    }
+    else
+    {
+        // Transition TO Windowed
+        SetWindowLong(hWnd, GWL_STYLE, dwStyle & ~WS_POPUP | WS_OVERLAPPEDWINDOW);
+        SetWindowPlacement(hWnd, &wpPrev);
+        SetWindowPos(hWnd, NULL, 0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
+            SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+    }
 }
 
 // ------------------------------------------------------------
@@ -629,7 +665,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     }
 
     ShowWindow(g_hWnd, nCmdShow);
-    UpdateWindow(g_hWnd);
+    ToggleFullscreen(g_hWnd);
 
     if (!CreateDevice() ||
         !CreateD2D() ||
