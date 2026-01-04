@@ -13,37 +13,61 @@ using namespace Gdiplus;
      WS_SYSMENU        | \
      WS_MINIMIZEBOX)
 
-// Global Variables:
-HINSTANCE hInst;                                // current instance
-WCHAR szTitle[MAX_LOADSTRING];                  // The title bar text
-WCHAR szWindowClass[MAX_LOADSTRING];            // the main window class name
-ULONG_PTR gdiplusToken;                         // GDI+ requires a token to start and stop
+// ------------------------------------------------------------
+// Globals
+// ------------------------------------------------------------
+HINSTANCE hInst;
+WCHAR szTitle[MAX_LOADSTRING];
+WCHAR szWindowClass[MAX_LOADSTRING];
+ULONG_PTR gdiplusToken = 0;
 
-// Forward declarations of functions included in this code module:
+HACCEL hAccelTable = nullptr;
+HBRUSH hBrushBackground = nullptr;
+
+// Back buffer
+HDC     g_BackDC = nullptr;
+HBITMAP g_BackBitmap = nullptr;
+
+// GDI+
+std::unique_ptr<Bitmap> g_BackgroundImage;
+std::unique_ptr<Font>   g_FontSmall;
+std::unique_ptr<Font>   g_FontLarge;
+std::unique_ptr<SolidBrush> g_WhiteBrush;
+std::unique_ptr<SolidBrush> g_GreenBrush;
+
+// State
+LPCWSTR g_lastKeyPressed = L"Press an arrow key to start";
+bool gameStarted = false;
+ULONGLONG g_StartTime = 0;
+WCHAR szCounterText[64] = L"00:00.00";
+WCHAR szFPS[32] = L"FPS: 0";
+
+// Timing
+LONGLONG g_Frequency = 0;
+LONGLONG g_LastTime = 0;
+float g_FrameTime = 0.0f;
+
+// FPS averaging
+float g_FpsAccum = 0.0f;
+int   g_FpsFrames = 0;
+
+// ------------------------------------------------------------
+// Forward declarations
+// ------------------------------------------------------------
 ATOM                MyRegisterClass(HINSTANCE hInstance);
 BOOL                InitInstance(HINSTANCE, int);
-VOID                DestroyGlobalObjects();
-VOID                ShowLastError(HWND hWnd, LPCWSTR functionName);
 LRESULT CALLBACK    WndProc(HWND, UINT, WPARAM, LPARAM);
 
-// Global objects:
-HBRUSH hBrushBackground;
-Gdiplus::Bitmap* pGlobalBitmap;
-HACCEL hAccelTable;
-LPCWSTR g_lastKeyPressed = L"Press an arrow key to start";
+void CreateBackBuffer(HWND hWnd);
+void DestroyBackBuffer();
+void UpdateGame();
+void Render(HWND hWnd);
+void DestroyGlobalObjects();
+void ShowLastError(HWND hWnd, LPCWSTR fn);
 
-// Time counter variables
-ULONGLONG g_StartTime = 0;
-WCHAR szCounterText[64] = L"00:00.00"; // Format: MM:SS.CC (Centiseconds)
-BOOL gameStarted = false;
-
-// FPS variables
-LONGLONG g_Frequency;
-LONGLONG g_LastTime;
-float g_FrameTime; // Time in seconds for the last frame
-WCHAR szFPS[20] = L"FPS: 0";
-
-
+// ------------------------------------------------------------
+// Entry Point
+// ------------------------------------------------------------
 int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     _In_opt_ HINSTANCE hPrevInstance,
     _In_ LPWSTR    lpCmdLine,
@@ -52,372 +76,303 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     UNREFERENCED_PARAMETER(hPrevInstance);
     UNREFERENCED_PARAMETER(lpCmdLine);
 
-    // TODO: Place code here.
-
-    // Initialize global strings
     LoadStringW(hInstance, IDS_APP_TITLE, szTitle, MAX_LOADSTRING);
     LoadStringW(hInstance, IDS_APP_CLASS, szWindowClass, MAX_LOADSTRING);
 
-    // START GDI+
-    GdiplusStartupInput gdiplusStartupInput;
-    GdiplusStartup(&gdiplusToken, &gdiplusStartupInput, NULL);
+    GdiplusStartupInput gsi;
+    GdiplusStartup(&gdiplusToken, &gsi, nullptr);
 
     MyRegisterClass(hInstance);
 
-    // Perform application initialization:
     if (!InitInstance(hInstance, nCmdShow))
-    {
         return FALSE;
-    }
 
     hAccelTable = LoadAccelerators(hInstance, MAKEINTRESOURCE(IDR_ACCELERATOR1));
 
-    MSG msg;
+    QueryPerformanceFrequency((LARGE_INTEGER*)&g_Frequency);
+    QueryPerformanceCounter((LARGE_INTEGER*)&g_LastTime);
 
-    // Main message loop:
-    while (GetMessage(&msg, nullptr, 0, 0))
+    MSG msg{};
+    HWND hWnd = FindWindow(szWindowClass, nullptr);
+
+    while (true)
     {
-        if (!TranslateAccelerator(msg.hwnd, hAccelTable, &msg))
+        while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
         {
-            TranslateMessage(&msg);
-            DispatchMessage(&msg);
+            if (msg.message == WM_QUIT)
+                goto shutdown;
+
+            if (!TranslateAccelerator(msg.hwnd, hAccelTable, &msg))
+            {
+                TranslateMessage(&msg);
+                DispatchMessage(&msg);
+            }
         }
+
+        UpdateGame();
+        InvalidateRect(hWnd, nullptr, FALSE);
+        Sleep(1);
     }
 
-    // SHUTDOWN GDI+ (After message loop finishes)
+shutdown:
+    DestroyGlobalObjects();
     GdiplusShutdown(gdiplusToken);
     return (int)msg.wParam;
 }
 
+// ------------------------------------------------------------
+// Error Handling
+// ------------------------------------------------------------
+void ShowLastError(HWND hWnd, LPCWSTR fn)
+{
+    DWORD err = GetLastError();
+    if (!err) return;
 
+    LPWSTR msg = nullptr;
+    FormatMessage(
+        FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM,
+        nullptr, err, 0, (LPWSTR)&msg, 0, nullptr);
 
-//
-//  FUNCTION: MyRegisterClass()
-//
-//  PURPOSE: Registers the window class.
-//
+    MessageBox(hWnd, msg, fn, MB_ICONERROR | MB_OK);
+    LocalFree(msg);
+}
+
+// ------------------------------------------------------------
+// Cleanup
+// ------------------------------------------------------------
+void DestroyGlobalObjects()
+{
+    DestroyBackBuffer();
+
+    g_BackgroundImage.reset();
+    g_FontSmall.reset();
+    g_FontLarge.reset();
+    g_WhiteBrush.reset();
+    g_GreenBrush.reset();
+
+    if (hBrushBackground)
+    {
+        DeleteObject(hBrushBackground);
+        hBrushBackground = nullptr;
+    }
+
+    if (hAccelTable)
+    {
+        DestroyAcceleratorTable(hAccelTable);
+        hAccelTable = nullptr;
+    }
+}
+
+// ------------------------------------------------------------
+// Window Class
+// ------------------------------------------------------------
 ATOM MyRegisterClass(HINSTANCE hInstance)
 {
-    hBrushBackground = CreateSolidBrush(RGB(0,0,0));
+    hBrushBackground = CreateSolidBrush(RGB(0, 0, 0));
 
-
-    WNDCLASSEXW wcex = {};
-
-    wcex.cbSize = sizeof(WNDCLASSEX);
-
-    wcex.style = CS_HREDRAW | CS_VREDRAW;
+    WNDCLASSEXW wcex{};
+    wcex.cbSize = sizeof(wcex);
     wcex.lpfnWndProc = WndProc;
-    wcex.cbClsExtra = 0;
-    wcex.cbWndExtra = 0;
     wcex.hInstance = hInstance;
-    wcex.hIcon = LoadIcon(hInstance, MAKEINTRESOURCE(IDI_ICON1));
     wcex.hCursor = LoadCursor(nullptr, IDC_ARROW);
-    wcex.hbrBackground = hBrushBackground;
+    wcex.hIcon = LoadIcon(hInstance, MAKEINTRESOURCE(IDI_ICON1));
+    wcex.hIconSm = wcex.hIcon;
+    wcex.hbrBackground = nullptr;
     wcex.lpszClassName = szWindowClass;
-    wcex.hIconSm = LoadIcon(wcex.hInstance, MAKEINTRESOURCE(IDI_ICON1));
 
     return RegisterClassExW(&wcex);
 }
 
-//
-//   FUNCTION: InitInstance(HINSTANCE, int)
-//
-//   PURPOSE: Saves instance handle and creates main window
-//
-//   COMMENTS:
-//
-//        In this function, we save the instance handle in a global variable and
-//        create and display the main program window.
-//
+// ------------------------------------------------------------
+// Init Instance
+// ------------------------------------------------------------
 BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 {
-    hInst = hInstance; // Store instance handle in our global variable
+    hInst = hInstance;
 
-    RECT rect = { 0, 0, 1440, 900 };
-    AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOWCUSTOM, FALSE);
+    RECT rc = { 0,0,1440,900 };
+    AdjustWindowRect(&rc, WS_OVERLAPPEDWINDOWCUSTOM, FALSE);
 
     HWND hWnd = CreateWindowW(
-        szWindowClass, 
-        szTitle, 
+        szWindowClass, szTitle,
         WS_OVERLAPPEDWINDOWCUSTOM,
-        0, 
-        0, 
-        rect.right - rect.left,         // Calculated width
-        rect.bottom - rect.top,         // Calculated height
-        nullptr, 
-        nullptr, 
-        hInstance, 
-        nullptr
-    );
+        CW_USEDEFAULT, 0,
+        rc.right - rc.left,
+        rc.bottom - rc.top,
+        nullptr, nullptr, hInstance, nullptr);
 
     if (!hWnd)
     {
+        ShowLastError(nullptr, L"CreateWindowW");
         return FALSE;
     }
 
     ShowWindow(hWnd, nCmdShow);
     UpdateWindow(hWnd);
-
-    SetTimer(hWnd, 1, 16, NULL);
-
     return TRUE;
 }
 
-VOID ShowLastError(HWND hWnd, LPCWSTR functionName) {
-    // 1. Capture error immediately
-    DWORD dwError = GetLastError();
-    if (dwError == 0) return; // No error to show
-
-    LPWSTR lpMsgBuf = nullptr;
-
-    // 2. Format the system error message
-    FormatMessage(
-        FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-        NULL,
-        dwError,
-        MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-        (LPWSTR)&lpMsgBuf, // Correct cast for ALLOCATE_BUFFER
-        0, NULL
-    );
-
-    // 3. Show the message box
-    // Use hWnd if available so the error box is modal to your window
-    MessageBox(hWnd, lpMsgBuf, functionName, MB_OK | MB_ICONERROR);
-
-    // 4. Cleanup allocated buffer
-    LocalFree(lpMsgBuf);
-
-    // 5. App-specific shutdown logic
-    DestroyGlobalObjects();
-    PostQuitMessage(1);
-}
-
-VOID DestroyGlobalObjects() {
-    if (hBrushBackground != NULL) {
-        DeleteObject(hBrushBackground);
-        hBrushBackground = NULL;
-    }
-
-    if (pGlobalBitmap) {
-        delete pGlobalBitmap;
-        pGlobalBitmap = nullptr;
-    }
-
-    if (hAccelTable != NULL) {
-        DestroyAcceleratorTable(hAccelTable);
-        hAccelTable = NULL;
-    }
-}
-
-
-//
-//  FUNCTION: WndProc(HWND, UINT, WPARAM, LPARAM)
-//
-//  PURPOSE: Processes messages for the main window.
-//
-//  WM_COMMAND  - process the application menu
-//  WM_PAINT    - Paint the main window
-//  WM_DESTROY  - post a quit message and return
-//
-//
-LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
+// ------------------------------------------------------------
+// Back Buffer
+// ------------------------------------------------------------
+void CreateBackBuffer(HWND hWnd)
 {
-    switch (message)
+    DestroyBackBuffer();
+
+    RECT rc;
+    GetClientRect(hWnd, &rc);
+
+    HDC hdc = GetDC(hWnd);
+    g_BackDC = CreateCompatibleDC(hdc);
+    g_BackBitmap = CreateCompatibleBitmap(hdc, rc.right, rc.bottom);
+
+    if (!g_BackDC || !g_BackBitmap)
     {
-        case WM_CREATE:
-        {
-            HINSTANCE hInstance = ((LPCREATESTRUCT)lParam)->hInstance;
-            HRSRC hResInfo = FindResource(hInstance, MAKEINTRESOURCE(IDB_PNG1), L"PNG");
+        ShowLastError(hWnd, L"CreateBackBuffer");
+        ReleaseDC(hWnd, hdc);
+        return;
+    }
 
-            QueryPerformanceFrequency((LARGE_INTEGER*)&g_Frequency);
-            QueryPerformanceCounter((LARGE_INTEGER*)&g_LastTime);
+    SelectObject(g_BackDC, g_BackBitmap);
+    ReleaseDC(hWnd, hdc);
+}
 
-            if (!hResInfo) {
-                ShowLastError(hWnd, L"FindResource (Ensure IDB_PNG1 is type 'PNG' in .rc)");
-                return -1; // WM_CREATE should return -1 on failure
-            }
+void DestroyBackBuffer()
+{
+    if (g_BackBitmap) { DeleteObject(g_BackBitmap); g_BackBitmap = nullptr; }
+    if (g_BackDC) { DeleteDC(g_BackDC); g_BackDC = nullptr; }
+}
 
-            DWORD dwSize = SizeofResource(hInstance, hResInfo);
-            HGLOBAL hResData = LoadResource(hInstance, hResInfo);
-            if (!hResData) {
-                ShowLastError(hWnd, L"LoadResource");
-                return -1;
-            }
+// ------------------------------------------------------------
+// Update
+// ------------------------------------------------------------
+void UpdateGame()
+{
+    LONGLONG now;
+    QueryPerformanceCounter((LARGE_INTEGER*)&now);
+    g_FrameTime = float(now - g_LastTime) / g_Frequency;
+    g_LastTime = now;
 
-            void* pResBuffer = LockResource(hResData);
-            HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, dwSize);
-            if (!hMem) {
-                ShowLastError(hWnd, L"GlobalAlloc");
-                return -1;
-            }
+    g_FpsAccum += g_FrameTime;
+    g_FpsFrames++;
 
-            void* pCopy = GlobalLock(hMem);
-            if (pCopy == nullptr) {
-                GlobalFree(hMem);
-                ShowLastError(hWnd, L"GlobalLock");
-                return -1;
-            }
+    if (g_FpsAccum >= 0.5f)
+    {
+        swprintf_s(szFPS, L"FPS: %.1f", g_FpsFrames / g_FpsAccum);
+        g_FpsAccum = 0;
+        g_FpsFrames = 0;
+    }
 
-            memcpy(pCopy, pResBuffer, dwSize);
-            GlobalUnlock(hMem);
+    if (gameStarted)
+    {
+        ULONGLONG e = GetTickCount64() - g_StartTime;
+        swprintf_s(szCounterText, L"%02llu:%02llu.%02llu",
+            e / 60000, (e / 1000) % 60, (e % 1000) / 10);
+    }
+}
 
-            IStream* pStream = nullptr;
-            if (CreateStreamOnHGlobal(hMem, TRUE, &pStream) != S_OK) {
-                GlobalFree(hMem); // Free manually since stream wasn't created
-                ShowLastError(hWnd, L"CreateStreamOnHGlobal");
-                return -1;
-            }
+// ------------------------------------------------------------
+// Render
+// ------------------------------------------------------------
+void Render(HWND hWnd)
+{
+    PAINTSTRUCT ps;
+    HDC hdc = BeginPaint(hWnd, &ps);
 
-            // Load directly into the global pointer
-            pGlobalBitmap = Gdiplus::Bitmap::FromStream(pStream);
+    RECT rc;
+    GetClientRect(hWnd, &rc);
 
-            if (!pGlobalBitmap || pGlobalBitmap->GetLastStatus() != Gdiplus::Ok) {
-                ShowLastError(hWnd, L"GDI+ PNG Load Failed");
-                return -1;
-            }
+    FillRect(g_BackDC, &rc, hBrushBackground);
+    Graphics g(g_BackDC);
 
-            pStream->Release(); // Memory is safe; GDI+ Bitmap keeps what it needs
-        }
-        break;
+    if (g_BackgroundImage)
+        g.DrawImage(g_BackgroundImage.get(), 0, 0);
 
-        case WM_ERASEBKGND:
-            return TRUE;
+    g.DrawString(g_lastKeyPressed, -1, g_FontSmall.get(),
+        PointF(20, rc.bottom - 40), g_WhiteBrush.get());
 
-        case WM_COMMAND: {
-            int wmId = LOWORD(wParam);
-            int wmEvent = HIWORD(wParam);
+    if (gameStarted)
+    {
+        g.DrawString(szCounterText, -1, g_FontLarge.get(),
+            PointF(20, 20), g_GreenBrush.get());
 
-            if (wmEvent == 1) { // Accelerator
+        StringFormat fmt;
+        fmt.SetAlignment(StringAlignmentFar);
+        RectF r(0, 0, (REAL)rc.right, (REAL)rc.bottom);
+        g.DrawString(szFPS, -1, g_FontSmall.get(), r, &fmt, g_WhiteBrush.get());
+    }
 
-                switch (wmId) {
-                    case ID_ACCELERATOR_VK_LEFT:  g_lastKeyPressed = L"LEFT"; gameStarted = true; break;
-                    case ID_ACCELERATOR_VK_RIGHT: g_lastKeyPressed = L"RIGHT"; gameStarted = true; break;
-                    case ID_ACCELERATOR_VK_UP:    g_lastKeyPressed = L"UP"; gameStarted = true;   break;
-                    case ID_ACCELERATOR_VK_DOWN:  g_lastKeyPressed = L"DOWN"; gameStarted = true; break;
-                }
+    BitBlt(hdc, 0, 0, rc.right, rc.bottom, g_BackDC, 0, 0, SRCCOPY);
+    EndPaint(hWnd, &ps);
+}
 
-                if (gameStarted && g_StartTime == 0) {
-                    g_StartTime = GetTickCount64();
-                }
+// ------------------------------------------------------------
+// WndProc
+// ------------------------------------------------------------
+LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    switch (msg)
+    {
+    case WM_CREATE:
+    {
+        CreateBackBuffer(hWnd);
 
-                InvalidateRect(hWnd, NULL, FALSE);
-                UpdateWindow(hWnd); // Force immediate redraw
-                return 0;
-            }
-        }
-        break;
+        HRSRC res = FindResource(hInst, MAKEINTRESOURCE(IDB_PNG1), L"PNG");
+        if (!res) { ShowLastError(hWnd, L"FindResource"); return -1; }
 
-        case WM_PAINT:
-        {
-            PAINTSTRUCT ps;
-            HDC hdc = BeginPaint(hWnd, &ps);
+        DWORD size = SizeofResource(hInst, res);
+        HGLOBAL data = LoadResource(hInst, res);
+        void* ptr = LockResource(data);
 
-            RECT rc;
-            GetClientRect(hWnd, &rc);
+        HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, size);
+        memcpy(GlobalLock(hMem), ptr, size);
+        GlobalUnlock(hMem);
 
-            // --- FPS CALCULATION START ---
-            LONGLONG currentTime;
-            QueryPerformanceCounter((LARGE_INTEGER*)&currentTime);
+        IStream* stream = nullptr;
+        CreateStreamOnHGlobal(hMem, TRUE, &stream);
+        g_BackgroundImage.reset(Bitmap::FromStream(stream));
+        stream->Release();
 
-            // Calculate elapsed time in seconds for the last frame
-            g_FrameTime = (float)(currentTime - g_LastTime) / g_Frequency;
-
-            // Update FPS counter every few frames (optional, prevents text flicker)
-            static float timeAccumulator = 0.0f;
-            timeAccumulator += g_FrameTime;
-
-            if (timeAccumulator >= 0.1f) // Update FPS text ~10 times a second
-            {
-                float fps = 1.0f / g_FrameTime;
-                swprintf_s(szFPS, L"FPS: %.1f", fps); // .1f for one decimal place
-                timeAccumulator = 0.0f;
-            }
-
-            g_LastTime = currentTime;
-            // --- FPS CALCULATION END ---
-
-            // 1. Double Buffer Setup
-            HDC backDC = CreateCompatibleDC(hdc);
-            HBITMAP backBmp = CreateCompatibleBitmap(hdc, rc.right, rc.bottom);
-            HBITMAP oldBackBmp = (HBITMAP)SelectObject(backDC, backBmp);
-
-            // 2. Clear Background (prevents "trails" if window resizes)
-            FillRect(backDC, &rc, hBrushBackground);
-
-            Gdiplus::Graphics graphics(backDC);
-
-            // 3. Draw with GDI+ for High Quality & Transparency
-            // Use the GDI+ Graphics object to draw onto your backDC
-            if (pGlobalBitmap) {
-                graphics.DrawImage(pGlobalBitmap, 0, 0);
-            }
-
-            // --- INIT FONT OBJECTS
-            Gdiplus::FontFamily fontFamily(L"Consolas");
-            
-            // --- DRAW LAST KEY PRESSED
-            Gdiplus::Font font(&fontFamily, 24, Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
-            Gdiplus::SolidBrush textBrush(Gdiplus::Color(255, 255, 255, 255)); // White
-            graphics.DrawString(g_lastKeyPressed, -1, &font, Gdiplus::PointF(20.0f, rc.bottom - 40.0f), &textBrush);
-            
-            // --- DRAW TIMER
-            if (gameStarted) {
-                Gdiplus::Font font2(&fontFamily, 36, Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
-                Gdiplus::SolidBrush textBrush2(Gdiplus::Color(255, 0, 255, 0)); // Green
-                graphics.DrawString(szCounterText, -1, &font2, Gdiplus::PointF(20.0f, 20.0f), &textBrush2);
-
-                Gdiplus::StringFormat format;
-                // Align text to the top-right corner
-                format.SetAlignment(Gdiplus::StringAlignmentFar);
-                format.SetLineAlignment(Gdiplus::StringAlignmentNear);
-
-                Gdiplus::RectF layoutRect(0.0f, 0.0f, (float)rc.right, (float)rc.bottom);
-                graphics.DrawString(szFPS, -1, &font, layoutRect, &format, &textBrush);
-            }
-
-            // 4. Final Blit to Screen
-            BitBlt(hdc, 0, 0, rc.right, rc.bottom, backDC, 0, 0, SRCCOPY);
-
-            // 5. Cleanup
-            SelectObject(backDC, oldBackBmp);
-            DeleteObject(backBmp);
-            DeleteDC(backDC);
-
-            EndPaint(hWnd, &ps);
-        }
-        break;
-
-        case WM_TIMER:
-        {
-            if (gameStarted) {
-                ULONGLONG currentTime = GetTickCount64();
-                ULONGLONG elapsed = currentTime - g_StartTime;
-
-                // Calculate components
-                UINT totalSeconds = (UINT)(elapsed / 1000);
-                UINT minutes = totalSeconds / 60;
-                UINT seconds = totalSeconds % 60;
-                UINT centiseconds = (UINT)((elapsed % 1000) / 10); // Show 2 digits for milliseconds
-
-                // Format: "01:23.45"
-                swprintf_s(szCounterText, L"%02u:%02u.%02u", minutes, seconds, centiseconds);
-            }
-
-            // Refresh the screen
-            InvalidateRect(hWnd, NULL, FALSE);
-            UpdateWindow(hWnd); // Force immediate redraw
-        }
-        break;
-
-        case WM_DESTROY:
-        {
-            DestroyGlobalObjects();
-            PostQuitMessage(0);
-        }
-        break;
-
-        default:
-            return DefWindowProc(hWnd, message, wParam, lParam);
+        FontFamily ff(L"Consolas");
+        g_FontSmall = std::make_unique<Font>(&ff, 24, FontStyleBold, UnitPixel);
+        g_FontLarge = std::make_unique<Font>(&ff, 36, FontStyleBold, UnitPixel);
+        g_WhiteBrush = std::make_unique<SolidBrush>(Color(255, 255, 255));
+        g_GreenBrush = std::make_unique<SolidBrush>(Color(255, 0, 255, 0));
     }
     return 0;
+
+    case WM_SIZE:
+        CreateBackBuffer(hWnd);
+        return 0;
+
+    case WM_ERASEBKGND:
+        return TRUE;
+
+    case WM_COMMAND:
+        switch (LOWORD(wParam))
+        {
+        case ID_ACCELERATOR_VK_LEFT:  g_lastKeyPressed = L"LEFT"; break;
+        case ID_ACCELERATOR_VK_RIGHT: g_lastKeyPressed = L"RIGHT"; break;
+        case ID_ACCELERATOR_VK_UP:    g_lastKeyPressed = L"UP"; break;
+        case ID_ACCELERATOR_VK_DOWN:  g_lastKeyPressed = L"DOWN"; break;
+        default: return DefWindowProc(hWnd, msg, wParam, lParam);
+        }
+
+        if (!gameStarted)
+        {
+            gameStarted = true;
+            g_StartTime = GetTickCount64();
+        }
+        return 0;
+
+    case WM_PAINT:
+        Render(hWnd);
+        return 0;
+
+    case WM_DESTROY:
+        DestroyGlobalObjects();
+        PostQuitMessage(0);
+        return 0;
+    }
+    return DefWindowProc(hWnd, msg, wParam, lParam);
 }
