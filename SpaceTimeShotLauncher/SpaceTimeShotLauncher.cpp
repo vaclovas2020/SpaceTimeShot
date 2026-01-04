@@ -248,7 +248,7 @@ void DestroyBackBuffer()
 // ------------------------------------------------------------
 void UpdateGame()
 {
-    LONGLONG now;
+    LONGLONG now = 0;
     QueryPerformanceCounter((LARGE_INTEGER*)&now);
     g_FrameTime = float(now - g_LastTime) / g_Frequency;
     g_LastTime = now;
