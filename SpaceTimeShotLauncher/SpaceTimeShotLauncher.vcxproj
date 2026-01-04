@@ -139,6 +139,7 @@
     <ResourceCompile Include="SpaceTimeShotLauncher.rc" />
   </ItemGroup>
   <ItemGroup>
+    <Image Include="Bitmap.png" />
     <Image Include="Icon.bmp" />
     <Image Include="Icon.ico" />
   </ItemGroup>

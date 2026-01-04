@@ -6,6 +6,7 @@
 #define IDR_ACCELERATOR1                102
 #define IDI_ICON1                       105
 #define IDS_APP_CLASS                   106
+#define IDB_PNG1                        108
 #define ID_ACCELERATOR_VK_LEFT          40001
 #define ID_ACCELERATOR_VK_RIGHT         40002
 #define ID_ACCELERATOR_VK_UP            40003
@@ -15,7 +16,7 @@
 // 
 #ifdef APSTUDIO_INVOKED
 #ifndef APSTUDIO_READONLY_SYMBOLS
-#define _APS_NEXT_RESOURCE_VALUE        107
+#define _APS_NEXT_RESOURCE_VALUE        109
 #define _APS_NEXT_COMMAND_VALUE         40006
 #define _APS_NEXT_CONTROL_VALUE         1001
 #define _APS_NEXT_SYMED_VALUE           107

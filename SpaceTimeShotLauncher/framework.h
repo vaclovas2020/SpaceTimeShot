@@ -19,4 +19,6 @@
 #include <vector>
 #include <thread>
 #include <atomic>
+#include <gdiplus.h>
 #pragma comment(lib, "avrt.lib")
+#pragma comment(lib, "gdiplus.lib")
