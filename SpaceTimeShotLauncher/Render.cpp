@@ -3,7 +3,22 @@
 #include "Render.h"
 
 void InitGame() {
-    g_Player = new Player(100.0f, 100.0f);
+    // 1. Get the real window dimensions
+    RECT rc;
+    GetClientRect(g_hWnd, &rc);
+    float screenWidth = (float)(rc.right - rc.left);
+    float screenHeight = (float)(rc.bottom - rc.top);
+
+    // 2. Define player dimensions
+    float playerWidth = 256.0f;
+    float playerHeight = 256.0f;
+
+    // 3. Calculate bottom-center position
+    float startX = (screenWidth - playerWidth) / 2.0f;
+    float startY = screenHeight - playerHeight;
+
+    // 4. Initialize player
+    g_Player = new Player(startX, startY);
 
     ID2D1Bitmap* playerBmp = nullptr;
     if (LoadPNGFromResource(IDB_SPACESHIP, &g_SpaceShipBitmap)) {
