@@ -18,7 +18,7 @@ void GameObject::SetBitmap(ID2D1Bitmap* bitmap)
 }
 
 // Logic updates (physics, AI, input)
-void GameObject::Update(float deltaTime, int screenWidth, int screenHeight)
+void GameObject::Update(float deltaTime)
 {
     // Default implementation: stationary
     // In child classes, you might do: x += speed * deltaTime;

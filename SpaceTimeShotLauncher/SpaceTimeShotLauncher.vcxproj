@@ -127,6 +127,7 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="Bullet.cpp" />
     <ClCompile Include="CreateDevice.cpp" />
     <ClCompile Include="ErrorHandler.cpp" />
     <ClCompile Include="GameObject.cpp" />
@@ -137,6 +138,7 @@
     <ClCompile Include="SpaceTimeShotLauncher.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="Bullet.h" />
     <ClInclude Include="CreateDevice.h" />
     <ClInclude Include="ErrorHandler.h" />
     <ClInclude Include="framework.h" />

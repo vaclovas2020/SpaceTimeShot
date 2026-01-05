@@ -1,4 +1,5 @@
 #include "Player.h"
+#include "global.h"
 
 Player::Player(float x, float y)
     : GameObject(x, y, 256.0f, 256.0f), // Initializing with your 256x256 size
@@ -19,23 +20,25 @@ void Player::HandleInput(bool up, bool down, bool left, bool right)
     if (right) velocityX = speed;
 }
 
-void Player::Update(float deltaTime, int screenWidth, int screenHeight)
+void Player::Update(float deltaTime)
 {
     // 1. Apply Movement
     // Multiplying by deltaTime ensures consistent speed across all monitor refresh rates
     x += velocityX * deltaTime;
     y += velocityY * deltaTime;
 
+    D2D1_SIZE_U size = g_D2DTarget->GetPixelSize();
+
     // 2. Dynamic Boundary Checking
     // Keep the 256x256 spaceship within the current window bounds
 
     // Left & Right
     if (x < 0) x = 0;
-    if (x > (float)screenWidth - width)
-        x = (float)screenWidth - width;
+    if (x > (float)size.width - width)
+        x = (float)size.width - width;
 
     // Top & Bottom
     if (y < 0) y = 0;
-    if (y > (float)screenHeight - height)
-        y = (float)screenHeight - height;
+    if (y > (float)size.height - height)
+        y = (float)size.height - height;
 }

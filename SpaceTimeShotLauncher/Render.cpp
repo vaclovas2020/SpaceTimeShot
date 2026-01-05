@@ -2,6 +2,19 @@
 #include "ErrorHandler.h"
 #include "Render.h"
 
+std::vector<Bullet*> g_Bullets;
+
+void HandleShooting() {
+    // Only spawn if Space is pressed (0x8000 check)
+    if (GetAsyncKeyState(VK_SPACE) & 0x8000) {
+        // Position bullet at the center-top of the player ship
+        float bulletX = g_Player->GetX() + (256.0f / 2.0f);
+        float bulletY = g_Player->GetY();
+
+        g_Bullets.push_back(new Bullet(bulletX, bulletY));
+    }
+}
+
 void InitGame() {
     // 1. Get the real window dimensions
     RECT rc;
@@ -187,10 +200,22 @@ void Update()
         bool left = GetAsyncKeyState(VK_LEFT) & 0x8000;
         bool right = GetAsyncKeyState(VK_RIGHT) & 0x8000;
 
-        D2D1_SIZE_U size = g_D2DTarget->GetPixelSize();
-
         g_Player->HandleInput(up, down, left, right);
-        g_Player->Update(dt, size.width, size.height);
+        g_Player->Update(dt);
+
+        HandleShooting();
+
+        // Update bullets and remove inactive ones (off-screen)
+        for (auto it = g_Bullets.begin(); it != g_Bullets.end(); ) {
+            (*it)->Update(dt);
+            if (!(*it)->IsActive()) {
+                delete* it;
+                it = g_Bullets.erase(it); // Remove from list
+            }
+            else {
+                ++it;
+            }
+        }
     }
 }
 
@@ -248,6 +273,10 @@ void Render()
 
         if (g_Player)
             g_Player->Render(g_D2DTarget);
+
+        for (Bullet* b : g_Bullets) {
+            b->Render(g_D2DTarget);
+        }
     }
 
     g_D2DTarget->EndDraw();

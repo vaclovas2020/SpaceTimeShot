@@ -21,7 +21,7 @@ public:
     void SetBitmap(ID2D1Bitmap* bitmap);
 
     // Core Game Loop Methods
-    virtual void Update(float deltaTime, int screenWidth, int screenHeight);
+    virtual void Update(float deltaTime);
     virtual void Render(ID2D1RenderTarget* pRenderTarget);
 
     // Getters and Setters
