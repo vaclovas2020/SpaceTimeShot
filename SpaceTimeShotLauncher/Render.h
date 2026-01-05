@@ -1,7 +1,8 @@
 #pragma once
 #include "global.h"
 
-bool LoadPNGFromResource(int resourceId);
+void InitGame();
+bool LoadPNGFromResource(int resourceId, ID2D1Bitmap** ppBitmap);
 bool CreateText();
 void Update();
 void Render();

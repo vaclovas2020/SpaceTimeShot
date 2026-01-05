@@ -44,6 +44,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
         {
             gameStarted = true;
             g_StartTime = GetTickCount64();
+            InitGame();
         }
         return 0;
 
@@ -77,7 +78,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
             // Recreate resources for the new size
             CreateD2D();
             CreateText();
-            LoadPNGFromResource(IDB_PNG1);
+            LoadPNGFromResource(IDB_PNG1, &g_BackgroundBitmap);
         }
         return 0;
 
@@ -151,7 +152,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     if (!CreateDevice() ||
         !CreateD2D() ||
         !CreateText() ||
-        !LoadPNGFromResource(IDB_PNG1)
+        !LoadPNGFromResource(IDB_PNG1, &g_BackgroundBitmap)
         ) {
         return 0;
     }
@@ -173,6 +174,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     }
 
 shutdown:
+    SAFE_RELEASE(g_SpaceShipBitmap);
     SAFE_RELEASE(g_BackgroundBitmap);
     SAFE_RELEASE(g_WhiteBrush);
     SAFE_RELEASE(g_GreenBrush);

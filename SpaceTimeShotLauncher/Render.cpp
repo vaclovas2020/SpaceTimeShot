@@ -1,24 +1,33 @@
 ﻿#include "global.h"
 #include "ErrorHandler.h"
+#include "Render.h"
 
+void InitGame() {
+    g_Player = new Player(100.0f, 100.0f);
+
+    ID2D1Bitmap* playerBmp = nullptr;
+    if (LoadPNGFromResource(IDB_SPACESHIP, &g_SpaceShipBitmap)) {
+        g_Player->SetBitmap(g_SpaceShipBitmap);
+    }
+}
 
 // ------------------------------------------------------------
 // Load PNG from Resource
 // ------------------------------------------------------------
-bool LoadPNGFromResource(int resourceId)
+// Added ID2D1Bitmap** outBitmap as a parameter
+bool LoadPNGFromResource(int resourceId, ID2D1Bitmap** ppBitmap)
 {
+    // Important: Initialize the output pointer to nullptr 
+    if (ppBitmap == nullptr) return false;
+    *ppBitmap = nullptr;
+
     IWICImagingFactory* wic = nullptr;
     IWICStream* stream = nullptr;
     IWICBitmapDecoder* decoder = nullptr;
     IWICBitmapFrameDecode* frame = nullptr;
     IWICFormatConverter* converter = nullptr;
 
-    // Locate resource
-    HRSRC hrsrc = FindResource(
-        g_hInst,
-        MAKEINTRESOURCE(resourceId),
-        L"PNG");
-
+    HRSRC hrsrc = FindResource(g_hInst, MAKEINTRESOURCE(resourceId), L"PNG");
     if (!hrsrc) return false;
 
     HGLOBAL hglob = LoadResource(g_hInst, hrsrc);
@@ -28,101 +37,30 @@ bool LoadPNGFromResource(int resourceId)
     DWORD size = SizeofResource(g_hInst, hrsrc);
     if (!data || !size) return false;
 
-    // Create WIC factory
-    HRESULT hr = CoCreateInstance(
-        CLSID_WICImagingFactory,
-        nullptr,
-        CLSCTX_INPROC_SERVER,
-        IID_PPV_ARGS(&wic));
+    HRESULT hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wic));
+    if (FAILED(hr)) goto cleanup;
 
-    if (FAILED(hr))
-    {
-        ShowHRESULT(g_hWnd, hr, L"CoCreateInstance() failed");
-
-        goto cleanup;
-    }
-
-    // Create stream from memory
     hr = wic->CreateStream(&stream);
+    if (FAILED(hr)) goto cleanup;
 
-    if (FAILED(hr))
-    {
-        ShowHRESULT(g_hWnd, hr, L"CreateStream() failed");
+    hr = stream->InitializeFromMemory(reinterpret_cast<BYTE*>(data), size);
+    if (FAILED(hr)) goto cleanup;
 
-        goto cleanup;
-    }
-
-    hr = stream->InitializeFromMemory(
-        reinterpret_cast<BYTE*>(data),
-        size);
-
-    if (FAILED(hr))
-    {
-        ShowHRESULT(g_hWnd, hr, L"InitializeFromMemory() failed");
-
-        goto cleanup;
-    }
-
-    // Decode PNG
-    hr = wic->CreateDecoderFromStream(
-        stream,
-        nullptr,
-        WICDecodeMetadataCacheOnLoad,
-        &decoder);
-
-    if (FAILED(hr))
-    {
-        ShowHRESULT(g_hWnd, hr, L"CreateDecoderFromStream() failed");
-
-        goto cleanup;
-    }
+    hr = wic->CreateDecoderFromStream(stream, nullptr, WICDecodeMetadataCacheOnLoad, &decoder);
+    if (FAILED(hr)) goto cleanup;
 
     hr = decoder->GetFrame(0, &frame);
+    if (FAILED(hr)) goto cleanup;
 
-    if (FAILED(hr))
-    {
-        ShowHRESULT(g_hWnd, hr, L"decoder->GetFrame() failed");
-
-        goto cleanup;
-    }
-
-    // Convert to 32bpp premultiplied BGRA
     hr = wic->CreateFormatConverter(&converter);
+    if (FAILED(hr)) goto cleanup;
 
-    if (FAILED(hr))
-    {
-        ShowHRESULT(g_hWnd, hr, L"wic->CreateFormatConverter() failed");
+    hr = converter->Initialize(frame, GUID_WICPixelFormat32bppPBGRA,
+        WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom);
+    if (FAILED(hr)) goto cleanup;
 
-        goto cleanup;
-    }
-
-    hr = converter->Initialize(
-        frame,
-        GUID_WICPixelFormat32bppPBGRA,
-        WICBitmapDitherTypeNone,
-        nullptr,
-        0.0,
-        WICBitmapPaletteTypeCustom);
-
-    if (FAILED(hr))
-    {
-        ShowHRESULT(g_hWnd, hr, L"converter->Initialize() failed");
-
-        goto cleanup;
-    }
-
-    // Create Direct2D bitmap
-    hr = g_D2DTarget->CreateBitmapFromWicBitmap(
-        converter,
-        nullptr,
-        &g_BackgroundBitmap);
-
-    if (FAILED(hr))
-    {
-        ShowHRESULT(g_hWnd, hr, L"g_D2DTarget->CreateBitmapFromWicBitmap() failed");
-
-        goto cleanup;
-    }
+    // Create Direct2D bitmap into the passed pointer
+    hr = g_D2DTarget->CreateBitmapFromWicBitmap(converter, nullptr, ppBitmap);
 
 cleanup:
     SAFE_RELEASE(converter);
@@ -131,8 +69,9 @@ cleanup:
     SAFE_RELEASE(stream);
     SAFE_RELEASE(wic);
 
-    return SUCCEEDED(hr) && g_BackgroundBitmap != nullptr;
+    return SUCCEEDED(hr) && (*ppBitmap != nullptr);
 }
+
 
 // ------------------------------------------------------------
 // Init DirectWrite + Brushes
@@ -226,6 +165,18 @@ void Update()
         g_FpsAccum = 0;
         g_FpsFrames = 0;
     }
+
+    if (gameStarted && g_Player && g_D2DTarget) {
+        bool up = GetAsyncKeyState(VK_UP) & 0x8000;
+        bool down = GetAsyncKeyState(VK_DOWN) & 0x8000;
+        bool left = GetAsyncKeyState(VK_LEFT) & 0x8000;
+        bool right = GetAsyncKeyState(VK_RIGHT) & 0x8000;
+
+        D2D1_SIZE_U size = g_D2DTarget->GetPixelSize();
+
+        g_Player->HandleInput(up, down, left, right);
+        g_Player->Update(dt, size.width, size.height);
+    }
 }
 
 // ------------------------------------------------------------
@@ -279,6 +230,9 @@ void Render()
             g_FontSmall,
             D2D1::RectF(size.width - 200, 20, size.width, 80),
             g_WhiteBrush);
+
+        if (g_Player)
+            g_Player->Render(g_D2DTarget);
     }
 
     g_D2DTarget->EndDraw();

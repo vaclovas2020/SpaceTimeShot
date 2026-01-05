@@ -129,7 +129,9 @@
   <ItemGroup>
     <ClCompile Include="CreateDevice.cpp" />
     <ClCompile Include="ErrorHandler.cpp" />
+    <ClCompile Include="GameObject.cpp" />
     <ClCompile Include="global.cpp" />
+    <ClCompile Include="Player.cpp" />
     <ClCompile Include="Render.cpp" />
     <ClCompile Include="ToggleFullscreen.cpp" />
     <ClCompile Include="SpaceTimeShotLauncher.cpp" />
@@ -138,7 +140,9 @@
     <ClInclude Include="CreateDevice.h" />
     <ClInclude Include="ErrorHandler.h" />
     <ClInclude Include="framework.h" />
+    <ClInclude Include="GameObject.h" />
     <ClInclude Include="global.h" />
+    <ClInclude Include="Player.h" />
     <ClInclude Include="Render.h" />
     <ClInclude Include="resource.h" />
     <ClInclude Include="SpaceTimeShotLauncher.h" />
@@ -152,6 +156,7 @@
     <Image Include="Bitmap.png" />
     <Image Include="Icon.bmp" />
     <Image Include="Icon.ico" />
+    <Image Include="spaceship.png" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

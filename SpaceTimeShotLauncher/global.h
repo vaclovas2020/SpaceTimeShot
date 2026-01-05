@@ -2,6 +2,7 @@
 
 #include "framework.h"
 #include "resource.h"
+#include "Player.h"
 
 #define SAFE_RELEASE(x) if (x) { x->Release(); x = nullptr; }
 
@@ -36,8 +37,9 @@ extern IDWriteTextFormat* g_FontLarge;
 extern ID2D1SolidColorBrush* g_WhiteBrush;
 extern ID2D1SolidColorBrush* g_GreenBrush;
 
-// Image
-extern ID2D1Bitmap* g_BackgroundBitmap;
+// Images
+extern ID2D1Bitmap* g_BackgroundBitmap; // background
+extern ID2D1Bitmap* g_SpaceShipBitmap; // spaceship game object (main character)
 
 // Game state
 extern bool        gameStarted;
@@ -51,3 +53,6 @@ extern LARGE_INTEGER g_LastTime;
 extern float g_FpsAccum;
 extern int   g_FpsFrames;
 extern float g_CurrentFPS;
+
+// Game Objects
+extern Player* g_Player;

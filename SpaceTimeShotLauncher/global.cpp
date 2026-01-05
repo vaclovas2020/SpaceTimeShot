@@ -26,8 +26,9 @@ IDWriteTextFormat* g_FontLarge = nullptr;
 ID2D1SolidColorBrush* g_WhiteBrush = nullptr;
 ID2D1SolidColorBrush* g_GreenBrush = nullptr;
 
-// Image
-ID2D1Bitmap* g_BackgroundBitmap = nullptr;
+// Images
+ID2D1Bitmap* g_BackgroundBitmap = nullptr; // background
+ID2D1Bitmap* g_SpaceShipBitmap = nullptr; // spaceship game object (main character)
 
 // Game state
 bool        gameStarted = false;
@@ -41,3 +42,6 @@ LARGE_INTEGER g_LastTime;
 float g_FpsAccum = 0.0f;
 int   g_FpsFrames = 0;
 float g_CurrentFPS = 0.0f;
+
+// Game Objects
+Player* g_Player = nullptr;
