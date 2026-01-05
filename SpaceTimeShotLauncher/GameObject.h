@@ -28,4 +28,6 @@ public:
     void SetPosition(float newX, float newY) { x = newX; y = newY; }
     float GetX() const { return x; }
     float GetY() const { return y; }
+    float GetWidth() const { return width; }
+    float GetHeight() const { return height; }
 };

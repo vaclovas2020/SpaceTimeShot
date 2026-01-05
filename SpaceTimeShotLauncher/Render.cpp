@@ -8,7 +8,7 @@ void HandleShooting() {
     // Only spawn if Space is pressed (0x8000 check)
     if (GetAsyncKeyState(VK_SPACE) & 0x8000) {
         // Position bullet at the center-top of the player ship
-        float bulletX = g_Player->GetX() + (256.0f / 2.0f);
+        float bulletX = g_Player->GetX() + (g_Player->GetWidth() / 2.0f);
         float bulletY = g_Player->GetY();
 
         g_Bullets.push_back(new Bullet(bulletX, bulletY));
