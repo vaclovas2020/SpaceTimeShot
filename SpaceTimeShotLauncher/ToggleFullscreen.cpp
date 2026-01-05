@@ -1,4 +1,5 @@
 #include "global.h"
+#include "ToggleFullScreen.h"
 
 void ToggleFullscreen(HWND hWnd)
 {

@@ -1,4 +1,5 @@
 #include "global.h"
+#include "ErrorHandler.h"
 
 // ------------------------------------------------------------
 // Error helper

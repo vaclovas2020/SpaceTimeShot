@@ -1,5 +1,6 @@
 #include "global.h"
 #include "ErrorHandler.h"
+#include "CreateDevice.h"
 
 // ------------------------------------------------------------
 // Create Device & SwapChain (REAL VSYNC)
