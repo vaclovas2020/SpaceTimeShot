@@ -127,6 +127,8 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="Alien.cpp" />
+    <ClCompile Include="AnimatedGameObject.cpp" />
     <ClCompile Include="Bullet.cpp" />
     <ClCompile Include="CreateDevice.cpp" />
     <ClCompile Include="ErrorHandler.cpp" />
@@ -138,6 +140,8 @@
     <ClCompile Include="SpaceTimeShotLauncher.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="Alien.h" />
+    <ClInclude Include="AnimatedGameObject.h" />
     <ClInclude Include="Bullet.h" />
     <ClInclude Include="CreateDevice.h" />
     <ClInclude Include="ErrorHandler.h" />
